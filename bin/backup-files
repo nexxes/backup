@@ -1,0 +1,138 @@
+#!/bin/bash
+
+. "$(dirname "$(readlink --canonicalize "$0")")"/backup-read-config.sh
+
+# Incremental
+REFERENCE="$1"
+
+# Where is the host located
+backup-find-backend
+
+
+################################################################################
+#
+# FOLDERS
+#
+################################################################################
+
+if ! err=$(mkdir --parent "$MIRROR_DIR" 2>&1); then
+	error "failed to create basedir \"$BASEDIR\": error \"$err\"!"
+	exit $ERR_STORAGE
+fi
+
+if ! err=$(mkdir --parent "$LOG_DIR" 2>&1); then
+	error "failed to create logdir \"$LOG_DIR\": error \"$err\"!"
+	exit $ERR_STORAGE
+fi
+
+if ! err=$(mkdir --parent "$BACKUP_DIR" 2>&1); then
+	error "failed to create backupdir \"$BACKUP_DIR\": error \"$err\"!"
+	exit $ERR_STORAGE
+fi
+
+
+################################################################################
+#
+# PROGRAMS
+#
+################################################################################
+
+fakeroot_cmd=()
+
+# Check fakeroot
+if [ "${FAKEROOT,,*}" == "yes" ]; then
+	info "Enabling fakeroot"
+	
+	
+	if ! fakeroot_bin="$(which fakeroot)" || [ ! -x "$fakeroot_bin" ]; then
+		error "No fakeroot binary found or binary not executable (which returned: \"$fakeroot_bin\")!"
+		exit $ERR_FAKEROOT
+	fi
+	
+	fakeroot_cmd=( "$fakeroot_bin" -i "${FAKEROOT_STATUS}" -s "$FAKEROOT_STATUS" -- )
+fi
+
+# Check rsync
+if [ ! -x "$RSYNC_BIN" ]; then
+	error "No rsync binary found or binary not executable (binary to use: \"$RSYNC_BIN\")!"
+	exit $ERR_RSYNC
+fi
+
+rsync_cmd=( "$RSYNC_BIN" ${RSYNC_PARAMS} )
+
+# Check exclude list
+if [ -n "${EXCLUDE_DEFAULT}" ]; then
+	if [ -r "${EXCLUDE_DEFAULT}" ]; then
+		info "using exclude file \"${EXCLUDE_DEFAULT}\"."
+		rsync_cmd=( "${rsync_cmd[@]}" "--exclude-from=${EXCLUDE_DEFAULT}" )
+	else
+		info "exclude file \"${EXCLUDE_DEFAULT}\" not found/readable!"
+	fi
+fi
+
+if [ -n "${EXCLUDE_FROM}" ]; then
+	if [ -r "${EXCLUDE_FROM}" ]; then
+		info "using exclude file \"${EXCLUDE_FROM}\"."
+		rsync_cmd=( "${rsync_cmd[@]}" "--exclude-from=${EXCLUDE_FROM}" )
+	else
+		info "exclude file \"${EXCLUDE_FROM}\" not found/readable!"
+	fi
+fi
+
+rsync_cmd=( "${rsync_cmd[@]}" "--rsh=ssh -F $HOME/.ssh/config" "$BACKEND:${REMOTE_DIR}" "${MIRROR_DIR}" )
+
+# Tar
+if [ ! -x "$TAR_BIN" ]; then
+	error "No tar binary found or binary not executable (binary to use: \"$TAR_BIN\")!"
+	exit $ERR_TAR
+fi
+
+tar_cmd=( "$TAR_BIN" --create $TAR_PARAMS "--listed-incremental=${SNAPSHOT_FILE}" "--index-file=${LOG_DIR}/listing" "--directory=$(dirname "${MIRROR_DIR}")" )
+
+if [ -n "$REFERENCE" ] && [ -r "$REFERENCE" ]; then
+	info "creating incremental backup, using reference \"$REFERENCE\"."
+	ln -s "$(dirname "${REFERENCE}")" "${BACKUP_DIR}"/reference
+	cp -a "$REFERENCE" "${SNAPSHOT_FILE}" || ( error "failed to copy reference file!" ; exit $ERR_TAR )
+fi
+
+tar_cmd=( "${tar_cmd[@]}" "$HOST" )
+
+################################################################################
+#
+#
+#
+################################################################################
+
+size_file="${LOG_DIR}/$(basename "${BACKUP_TAR}").size"
+md5_file="${LOG_DIR}/$(basename "${BACKUP_TAR}").md5sum"
+
+info "executing '${fakeroot_cmd[@]} ${rsync_cmd[@]}'"
+"${fakeroot_cmd[@]}" "${rsync_cmd[@]}" >"${LOG_DIR}/rsync-stdout.log" 2>"${LOG_DIR}/rsync-stderr.log" || ( errno=$? ; error "rsync failed: $errno" ; exit $ERR_RSYNC )
+
+info "executing '${fakeroot_cmd[@]} ${tar_cmd[@]}'"
+"${fakeroot_cmd[@]}" "${tar_cmd[@]}" 2>"${LOG_DIR}/tar-stderr.log" |
+	"${COMPRESS_BIN}" $COMPRESS_PARAMS |
+	tee >(wc --bytes > "$size_file") >(md5sum | dd bs=32 count=1 2>/dev/null >"$md5_file") >"${BACKUP_TAR}"  || ( errno=$? ; error "tar failed: $errno" ; exit $ERR_TAR )
+
+
+info "verifying backup"
+
+size=$(stat --format='%s' "${BACKUP_TAR}")
+if (( size ==  $(< "$size_file") )); then
+	info "size OK"
+else
+	error "ERR: tar archive size mismatch: is $size, should $(< "$size_file")"
+	exit $ERR_TAR
+fi
+
+info "checking md5sum"
+echo "  ${BACKUP_TAR}" >> "$md5_file"
+if md5sum --check "$md5_file" >/dev/null 2>&1; then
+	info "md5sum OK"
+else
+	error "md5sum of tar archive does not match, backup defect!"
+	exit $ERR_TAR
+fi
+
+info "compressing log files"
+"${COMPRESS_BIN}" $COMPRESS_PARAMS "${LOG_DIR}/rsync-stdout.log" "${LOG_DIR}/rsync-stderr.log" "${LOG_DIR}/tar-stderr.log" "${LOG_DIR}/listing"
