@@ -6,26 +6,57 @@ if [ ! -w /dev/fd/3 ]; then
 	exec 3>&2
 fi
 
+# Colorize error messages
+if [ -t 2 ]; then
+	ERROR_COLOR="\033[0;31m"
+	ERROR_RESET="\033[0m"
+	ERROR_WHITE="\033[1;30m"
+fi
+
+# Colorize warn and info messages
+if [ -t 3 ]; then
+	WARN_COLOR="\033[1;33m"
+	WARN_RESET="\033[0m"
+	WARN_WHITE="\033[1;30m"
+	
+	INFO_COLOR="\033[1;37m"
+	INFO_RESET="\033[0m"
+	INFO_WHITE="\033[1;30m"
+fi
+
+
 function info() {
 	local args
 	
 	[ "$1" == "-e" ] && args+=" -e" && shift
-	echo $args "$CALLER (INFO): $@" >&3
-}
-
-function error() {
-	local args
 	
-	[ "$1" == "-e" ] && args+=" -e" && shift
-	echo $args "$CALLER (ERROR): $@" >&2
-}
+	echo -n  "$(date +'%Y-%m-%d %H:%I:%S') "
+	echo -en "${INFO_COLOR}INFO${INFO_RESET} "
+	echo -en "${INFO_WHITE}${CALLER}${INFO_RESET}: "
+	echo $args "$@"
+} >&3
 
 function warn() {
 	local args
 	
 	[ "$1" == "-e" ] && args+=" -e" && shift
-	echo $args "$CALLER (WARN): $@" >&3
-}
+	
+	echo -n  "$(date +'%Y-%m-%d %H:%I:%S') "
+	echo -en "${WARN_COLOR}WARN${WARN_RESET} "
+	echo -en "${WARN_WHITE}${CALLER}${WARN_RESET}: "
+	echo $args "$@"
+} >&3
+
+function error() {
+	local args
+	
+	[ "$1" == "-e" ] && args+=" -e" && shift
+	
+	echo -n  "$(date +'%Y-%m-%d %H:%I:%S') "
+	echo -en "${ERROR_COLOR}ERR ${ERROR_RESET} "
+	echo -en "${ERROR_WHITE}${CALLER}${ERROR_RESET}: "
+	echo $args "$@"
+} >&2
 
 # Check if script is sourced in another bash script
 if [ "$0" != "$BASH_SOURCE" ]; then
