@@ -50,12 +50,6 @@ while (( i < ${#conf_files[@]} )); do
 			continue
 		fi
 		
-		# Include single file
-		if [ "${REPLY:0:8}" == "!include" ]; then
-			conf_files[${#conf_files[@]}]="${REMOTE_DIR}/image/${REPLY:9}"
-			continue
-		fi
-		
 		# Include directory
 		if [ "${REPLY:0:11}" == "!includedir" ]; then
 			dir="${REPLY:12}"
@@ -64,6 +58,12 @@ while (( i < ${#conf_files[@]} )); do
 				conf_files[${#conf_files[@]}]="${REMOTE_DIR}/image/$dir/$f"
 			done
 			
+			continue
+		fi
+		
+		# Include single file
+		if [ "${REPLY:0:8}" == "!include" ]; then
+			conf_files[${#conf_files[@]}]="${REMOTE_DIR}/image/${REPLY:9}"
 			continue
 		fi
 		
