@@ -30,7 +30,7 @@ function info() {
 	
 	[ "$1" == "-e" ] && args+=" -e" && shift
 	
-	echo -n  "$(date +'%Y-%m-%d %H:%I:%S') "
+	echo -n  "$(date +'%Y-%m-%d %H:%M:%S') "
 	echo -en "${INFO_COLOR}INFO${INFO_RESET} "
 	echo -en "${INFO_WHITE}${CALLER}${INFO_RESET}: "
 	echo $args "$@"
@@ -41,7 +41,7 @@ function warn() {
 	
 	[ "$1" == "-e" ] && args+=" -e" && shift
 	
-	echo -n  "$(date +'%Y-%m-%d %H:%I:%S') "
+	echo -n  "$(date +'%Y-%m-%d %H:%M:%S') "
 	echo -en "${WARN_COLOR}WARN${WARN_RESET} "
 	echo -en "${WARN_WHITE}${CALLER}${WARN_RESET}: "
 	echo $args "$@"
@@ -52,7 +52,7 @@ function error() {
 	
 	[ "$1" == "-e" ] && args+=" -e" && shift
 	
-	echo -n  "$(date +'%Y-%m-%d %H:%I:%S') "
+	echo -n  "$(date +'%Y-%m-%d %H:%M:%S') "
 	echo -en "${ERROR_COLOR}ERR ${ERROR_RESET} "
 	echo -en "${ERROR_WHITE}${CALLER}${ERROR_RESET}: "
 	echo $args "$@"
