@@ -2,7 +2,7 @@
 
 . "$(dirname "$(readlink --canonicalize "$0")")"/backup-read-config.sh
 
-REFERENCE="$1"
+REFERENCE="${1:-""}"
 
 info "Starting script"
 
@@ -10,20 +10,70 @@ info "Starting script"
 backup-find-backend
 backup-create-folders
 
+# Enable ssh multiplexing
 ssh="ssh $BACKEND"
+$ssh -f -M -N
 
 ################################################################################
 #
-# Preparation / generate&upload config
+# Preparation
 #
 ################################################################################
 
+# Local name of mysql config
+mysql_cnf="${BACKUP_DIR}/my.cnf"
+
+# Remote name of uploaded mysql config
 remote_mysql_cnf="$($ssh mktemp --suffix=.cnf)"
-remote_innodb_tables="$($ssh mktemp)"
+
+# Put temporary backup data here
 remote_backup_dir="$($ssh mktemp --directory --tmpdir=\"${REMOTE_DIR}\")"
 
+# Store recorded size and md5sum of innodb backup here
+innodb_size_file="${LOG_DIR}/$(basename "$BACKUP_INNODB").size"
+innodb_md5sum_file="${LOG_DIR}/$(basename "$BACKUP_INNODB").md5sum"
+
+# Write return value of innodb backup process here
+remote_innodb_error_file="$($ssh mktemp)"
+
+# All fifos for mysql pipelining here
+fifo_dir="$(mktemp --directory)"
+
+# Numbers of the file descriptors to use
+file_reader=7
+mysql_control=8
+mysql_result=9
+
+# Listing of all remote tables here
+tables_list="$(mktemp --tmpdir table-XXXXXXXX.lst)"
+
+
+function backup-mysql-cleanup() {
+	info "cleaning up"
+	
+	eval "exec $file_reader<&-"
+	eval "exec $mysql_control>&-"
+	eval "exec $mysql_result>&-"
+	
+	$ssh "rm -Rf \"$remote_mysql_cnf\" \"$remote_backup_dir\" \"$remote_innodb_error_file\""
+	rm -Rf "$fifo_dir" "$tables_list"
+	
+	$ssh -O exit >/dev/null 2>&1
+	
+	trap - INT TERM EXIT
+	exit
+}
+
+trap "backup-mysql-cleanup" INT TERM EXIT
+
+
+################################################################################
+#
+# Generate and upload mysql config
+#
+################################################################################
+
 info "Generating mysql config"
-mysql_cnf="${BACKUP_DIR}/my.cnf"
 "$(dirname "$(readlink --canonicalize "$0")")"/backup-mysql-config.sh > "$mysql_cnf"
 
 cat >>"$mysql_cnf" <<-ENDL
@@ -61,37 +111,18 @@ if ! xtrabackup_bin="$($ssh 'which xtrabackup_51')" || ! $ssh "test -x '$xtrabac
 fi
 
 info "Starting InnoDB backup"
-md5sum_file="${LOG_DIR}/$(basename "$BACKUP_INNODB").md5sum"
-size_file="${LOG_DIR}/$(basename "$BACKUP_INNODB").size"
-remote_error_file="$($ssh mktemp)"
 
-$ssh "( $xtrabackup_bin --defaults-file=\"$remote_mysql_cnf\" \"$remote_backup_dir\" || echo \"\$?\" > \"$remote_error_file\") | $COMPRESS_BIN $COMPRESS_PARAMS" 2>"${LOG_DIR}/xtrabackup.log" |
-tee >(md5sum | dd bs=32 count=1 > "$md5sum_file" 2>/dev/null) >(wc --bytes > "$size_file") > "$BACKUP_INNODB"
+$ssh "( $xtrabackup_bin --defaults-file=\"$remote_mysql_cnf\" \"$remote_backup_dir\" || echo \"\$?\" > \"$remote_innodb_error_file\") | $COMPRESS_BIN $COMPRESS_PARAMS" 2>"${LOG_DIR}/xtrabackup.log" |
+tee >(md5sum >"$innodb_md5sum_file" 2>/dev/null) >(wc --bytes > "$innodb_size_file") > "$BACKUP_INNODB"
 
-$ssh "test -s \"$remote_error_file\"" &&
+$ssh "test -s \"$remote_innodb_error_file\"" &&
 error "Failed to create innodb backup, see log for more details" &&
 exit $ERR_INNOBACKUP
 
+backup-verify "$BACKUP_INNODB" "$innodb_size_file" "$innodb_md5sum_file" || exit $ERR_INNOBACKUP
+
 $ssh "cat \"${remote_backup_dir}\"/xtrabackup_checkpoints" > "${MYSQL_DIR}/xtrabackup_checkpoints"
 
-size_is="$(stat --format="%s" "$BACKUP_INNODB")"
-size_should="$(< "$size_file")"
-if (( size_is == size_should )); then
-	info "  size OK"
-else
-	error "  size mismatch: is $size_is, should be $size_should"
-	exit $ERR_INNOBACKUP
-fi
-
-info "  checking md5sum"
-if [ "$(md5sum "$BACKUP_INNODB" | dd bs=32 count=1 2>/dev/null)" == "$(< $md5sum_file)" ]; then
-	info "  md5sum OK"
-else
-	error "  md5sum mismatch, backup file seems to be corrupt"
-	exit $ERR_INNOBACKUP
-fi
-
-# FIXME: check that everything is ok
 
 ################################################################################
 #
@@ -99,51 +130,6 @@ fi
 #
 ################################################################################
 
-function backup-mysql-fix-name() {
-	local name="$1"
-	
-	# Ignore names without special chars
-	[ "${name/@/}" == "$name" ] && echo $name && return
-	
-	# Translate basic ascii special chars
-	#name="$(echo "$name" | sed 's/@\([0-9a-f]\{2\}\)\([0-9a-f]\{2\}\)/\\x\1\\x\2/g')"
-	name="$(echo "$name" | sed 's/@\(00\)\([0-9a-f]\{2\}\)/\\x\1\\x\2/g')"
-	
-	# FIXME: translate all the other crap from http://dev.mysql.com/doc/refman/5.1/en/identifier-mapping.html
-	# See also: http://www.skysql.com/blogs/kolbe/demystifying-identifier-mapping
-	[ "${name/@/}" != "$name" ] && warn "database/table name \"$name\" stil contains untranslatable characters"
-	
-	echo -e "$name"
-}
-
-function backup-mysql-query() {
-	local query="$1"
-	local fd_to="$2"
-	local fd_from="$3"
-	local data
-	local str="backupMySQLQuerySuccessToken"
-	
-	echo "$query" >&$fd_to
-	echo "SELECT \"$str\";" >&$fd_to
-	
-	read -u $fd_from data
-	while read -u $fd_from -t 0; do
-		read -u $fd_from
-		data+="$REPLY"
-	done
-	
-	if [ "$data" != "$str" ]; then
-		echo "${data/$str/}"
-		return 1
-	else
-		return 0
-	fi
-}
-
-fifo_dir="$(mktemp --directory)"
-file_reader=7
-mysql_control=8
-mysql_result=9
 mkfifo "$fifo_dir/in.fifo"
 mkfifo "$fifo_dir/out.fifo"
 
@@ -154,16 +140,15 @@ eval "exec $mysql_control>\"$fifo_dir/in.fifo\""
 eval "exec $mysql_result<\"$fifo_dir/out.fifo\""
 
 info "Flushing tables"
-echo "FLUSH TABLES; SELECT \"flushed\";" >&$mysql_control
-read -u $mysql_result
-[ "$REPLY" != "flushed" ] && error "Failed to flush tables" && exit $ERR_MYSQL
+! flush_msg=$(backup-mysql-query "FLUSH TABLES;" $mysql_control $mysql_result) &&
+	error "failed to flush tables: ($flush_msg)" && exit $ERR_MYSQL
 
-
-tables_list="$(mktemp --tmpdir table-XXXXXXXX.lst)"
-# A little fix as a normal while ... done < "$myisam_tables" did break after the first iteration
+# Generate tables listing
 $ssh "cd \"${REMOTE_DIR}/image/var/lib/mysql\" ; ls */*.frm" | sed 's/\.frm$//g' > "$tables_list"
 
+# A little fix as a normal while ... done < "$myisam_tables" did break after the first iteration
 eval "exec $file_reader<\"$tables_list\""
+
 tables_count=$(cat "$tables_list" | wc -l)
 counter=0
 
@@ -243,17 +228,3 @@ while read -u $file_reader; do
 	! unlock_msg=$(backup-mysql-query "UNLOCK TABLES;" $mysql_control $mysql_result) &&
 	error "failed to unlock table \"$database.$table\" ($unlock_msg)" && exit $ERR_MYSQL
 done
-
-################################################################################
-#
-# Cleanup
-#
-################################################################################
-	
-info "Finishing"
-eval "exec $file_reader<&-"
-eval "exec $mysql_control>&-"
-eval "exec $mysql_result>&-"
-
-$ssh "rm -Rf \"$remote_mysql_cnf\" \"$remote_innodb_tables\" \"$remote_backup_dir\""
-rm -Rf "$fifo_dir"

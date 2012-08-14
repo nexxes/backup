@@ -2,6 +2,9 @@
 
 export LC_ALL=C
 
+# Disallow unset variables
+set -o nounset
+
 if [ ! -w /dev/fd/3 ]; then
 	exec 3>&2
 fi
@@ -26,7 +29,7 @@ fi
 
 
 function info() {
-	local args
+	local args=""
 	
 	[ "$1" == "-e" ] && args+=" -e" && shift
 	
@@ -37,7 +40,7 @@ function info() {
 } >&3
 
 function warn() {
-	local args
+	local args=""
 	
 	[ "$1" == "-e" ] && args+=" -e" && shift
 	
@@ -48,7 +51,7 @@ function warn() {
 } >&3
 
 function error() {
-	local args
+	local args=""
 	
 	[ "$1" == "-e" ] && args+=" -e" && shift
 	
@@ -68,7 +71,7 @@ fi
 export CALLER
 
 # Host is the first parameter if not supplied as env variable
-if [ -z "$HOST" ]; then
+if [ -z "${HOST:-""}" ]; then
 	HOST="$1"
 	shift
 fi
@@ -134,10 +137,10 @@ function backup-find-backend() {
 	local server error errno backend
 	
 	# If we found a backend already we do not need to search for it again
-	[ -n "$BACKEND" ] && return
+	[ -n "${BACKEND:-""}" ] && return
 	
 	# Verify backends are set for host
-	if [ -z "${BACKENDS}" ]; then
+	if [ -z "${BACKENDS:-""}" ]; then
 		error "No storage backends awailable!"
 		exit $ERR_BACKENDS
 	fi
@@ -198,3 +201,105 @@ function backup-create-folders() {
 	
 	[ ! -L "${BACKUP_DIR}/logs" ] && ln -s "${LOG_DIR}" "${BACKUP_DIR}/logs"
 }
+
+
+################################################################################
+#
+# MySQL helper
+#
+################################################################################
+
+# Translate encoded mysql database files to originating name (=table name)
+function backup-mysql-fix-name() {
+	local name="$1"
+	
+	# Ignore names without special chars
+	[ "${name/@/}" == "$name" ] && echo $name && return
+	
+	# Translate basic ascii special chars
+	#name="$(echo "$name" | sed 's/@\([0-9a-f]\{2\}\)\([0-9a-f]\{2\}\)/\\x\1\\x\2/g')"
+	name="$(echo "$name" | sed 's/@\(00\)\([0-9a-f]\{2\}\)/\\x\1\\x\2/g')"
+	
+	# FIXME: translate all the other crap from http://dev.mysql.com/doc/refman/5.1/en/identifier-mapping.html
+	# See also: http://www.skysql.com/blogs/kolbe/demystifying-identifier-mapping
+	[ "${name/@/}" != "$name" ] && warn "database/table name \"$name\" stil contains untranslatable characters"
+	
+	echo -e "$name"
+}
+
+#
+# Execute a query by using the background mysql connection
+# Use this to execute queries that return nothing and may block until they are finished
+#  like "FLUSH TABLES WITH READ LOCK", "LOCK TABLE", etc
+# If the query fails, 1 is returned and an error is issued to stdout
+#
+# @param query String: Query to execute
+# @param fd_to Int: Numeric file descriptor to write data to
+# @param fd_from Int: Numeric file descriptor to read mysql answer from
+#
+function backup-mysql-query() {
+	local query="$1"
+	local fd_to="$2"
+	local fd_from="$3"
+	local data
+	local str="backupMySQLQuerySuccessToken"
+	
+	echo "$query" >&$fd_to
+	echo "SELECT \"$str\";" >&$fd_to
+	
+	read -u $fd_from data
+	while read -u $fd_from -t 0; do
+		read -u $fd_from
+		data+="$REPLY"
+	done
+	
+	if [ "$data" != "$str" ]; then
+		echo "${data/$str/}"
+		return 1
+	else
+		return 0
+	fi
+}
+
+
+#
+# Verify a file 
+# ref_size and ref_md5 can also be a file containing that information
+#
+# @param file String: File to verify
+# @param ref_size Int: Size the file should have
+# @param ref_md5 String: MD5 hash to check file against
+#
+function backup-verify() {
+	local file="$1"
+	local ref_size="$2"
+	local ref_md5="$3"
+	
+	info "Verifying file \"$file\""
+	
+	# Check size
+	[ -r "$ref_size" ] && ref_size=$(< "$ref_size")
+	
+	local is_size=$(stat --format="%s" "$file")
+	
+	if (( ref_size == is_size )); then
+		info "  size OK"
+	else
+		error "  size mismatch: is $is_size, should be $ref_size"
+		return 1
+	fi
+	
+	[ -r "$ref_md5" ] && ref_md5=$(< "$ref_md5")
+	
+	local is_md5=$(md5sum "$file" 2>/dev/null)
+	
+	if [ "${ref_md5:0:32}" == "${is_md5:0:32}" ]; then
+		info "  md5sum OK"
+	else
+		error "  md5sum mismatch, file seems to be corrupt"
+		return 2
+	fi
+	
+	return 0
+}
+
