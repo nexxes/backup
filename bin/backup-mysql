@@ -2,6 +2,8 @@
 
 . "$(dirname "$(readlink --canonicalize "$0")")"/backup-read-config.sh
 
+REFERENCE="$1"
+
 info "Starting script"
 
 # Where is the host located
@@ -35,8 +37,12 @@ cat >>"$mysql_cnf" <<-ENDL
 	extra-lsndir = $remote_backup_dir
 	backup
 	no-timestamp
-	# incremental-lsn = 0:999456199
 ENDL
+
+if [ -n "$REFERENCE" ]; then
+	echo "incremental-lsn = $REFERENCE" >> "$mysql_cnf"
+	info "  using incremental backup from lsn \"$REFERENCE\""
+fi
 
 info "Uploading mysql config"
 cat "$mysql_cnf" | $ssh "cat > \"$remote_mysql_cnf\""
@@ -200,21 +206,38 @@ while read -u $file_reader; do
 	fi
 	
 	for file_remote in $($ssh "ls \"${REMOTE_DIR}/image/var/lib/mysql/${database_dir}/${table_file}\".*"); do
+		filename="$(basename "$file_remote")"
+		file_local="${MYSQL_DIR}/$database_dir/$filename.${COMPRESS_EXT}"
+		file_repo="${MYSQL_STATIC_DIR}/$database_dir/$filename.${COMPRESS_EXT}"
+		
 		# Skip innodb data files
 		if [ "${file_remote%.ibd}" != "${file_remote}" ]; then
-			info "  skipping InnoDB data file \"$(basename "$(dirname "$file_remote")")/$(basename "$file_remote")\""
+			info "  skipping InnoDB data file \"$database_dir/$filename\""
 			continue
 		fi
 		
-		info "  transfering \"$(basename "$(dirname "$file_remote")")/$(basename "$file_remote")\""
 		
 		date_remote=$($ssh "stat --format=%y \"$file_remote\"")
-		file_local="${MYSQL_DIR}/$(basename "$(dirname "$file_remote")")/$(basename "$file_remote").${COMPRESS_EXT}"
+		mkdir --parent "$(dirname "$file_local")" "$(dirname "$file_repo")"
 		
-		mkdir --parent "$(dirname "$file_local")"
+		# Look into static repository
+		if [ -r "$file_repo" ]; then
+			date_repo="$(stat --format=%y "$file_repo")"
+			
+			# Use file from repo, no downloading
+			if [ "$date_remote" == "$date_repo" ]; then
+				cp -l "$file_repo" "$file_local"
+				info "  using file from repo for \"$database_dir/$filename\""
+				continue
+			fi
+			
+			rm -f "$file_repo"
+		fi
 		
+		info "  transfering \"$database_dir/$filename\""
 		$ssh "${COMPRESS_BIN} ${COMPRESS_PARAMS} --stdout "$file_remote"" > "$file_local"
 		touch --date="$date_remote" "$file_local"
+		cp -l "$file_local" "$file_repo"
 	done
 	
 	! unlock_msg=$(backup-mysql-query "UNLOCK TABLES;" $mysql_control $mysql_result) &&
