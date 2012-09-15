@@ -30,8 +30,8 @@ remote_mysql_cnf="$($ssh mktemp --suffix=.cnf)"
 remote_backup_dir="$($ssh mktemp --directory --tmpdir=\"${REMOTE_DIR}\")"
 
 # Store recorded size and md5sum of innodb backup here
-innodb_size_file="${LOG_DIR}/$(basename "$BACKUP_INNODB").size"
-innodb_md5sum_file="${LOG_DIR}/$(basename "$BACKUP_INNODB").md5sum"
+innodb_size_file="${STATUS_DIR}/$(basename "$BACKUP_INNODB").size"
+innodb_md5sum_file="${STATUS_DIR}/$(basename "$BACKUP_INNODB").md5sum"
 
 # Write return value of innodb backup process here
 remote_innodb_error_file="$($ssh mktemp)"
@@ -61,7 +61,7 @@ function backup-mysql-cleanup() {
 	$ssh -O exit >/dev/null 2>&1
 	
 	trap - INT TERM EXIT
-	exit
+	exit 0
 }
 
 trap "backup-mysql-cleanup" INT TERM EXIT
@@ -89,9 +89,11 @@ cat >>"$mysql_cnf" <<-ENDL
 	no-timestamp
 ENDL
 
-if [ -n "$REFERENCE" ]; then
-	echo "incremental-lsn = $REFERENCE" >> "$mysql_cnf"
-	info "  using incremental backup from lsn \"$REFERENCE\""
+if [ -L "${STATUS_DIR}/reference" ] && [ -r "${STATUS_DIR}/reference/mysql/xtrabackup_checkpoints" ]; then
+	ref_lsn=$(grep "to_lsn" "${STATUS_DIR}/reference/mysql/xtrabackup_checkpoints" | sed 's/^to_lsn = //')
+	
+	echo "incremental-lsn = $ref_lsn" >> "$mysql_cnf"
+	info "  using incremental backup from lsn \"$ref_lsn\""
 fi
 
 info "Uploading mysql config"
@@ -112,7 +114,7 @@ fi
 
 info "Starting InnoDB backup"
 
-$ssh "( $xtrabackup_bin --defaults-file=\"$remote_mysql_cnf\" \"$remote_backup_dir\" || echo \"\$?\" > \"$remote_innodb_error_file\") | $COMPRESS_BIN $COMPRESS_PARAMS" 2>"${LOG_DIR}/xtrabackup.log" |
+$ssh "( $xtrabackup_bin --defaults-file=\"$remote_mysql_cnf\" \"$remote_backup_dir\" || echo \"\$?\" > \"$remote_innodb_error_file\") | $COMPRESS_BIN $COMPRESS_PARAMS" 2>"${STATUS_DIR}/xtrabackup.log" |
 tee >(md5sum >"$innodb_md5sum_file" 2>/dev/null) >(wc --bytes > "$innodb_size_file") > "$BACKUP_INNODB"
 
 $ssh "test -s \"$remote_innodb_error_file\"" &&

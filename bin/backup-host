@@ -1,0 +1,47 @@
+#!/bin/bash
+
+. "$(dirname "$(readlink --canonicalize "$0")")"/backup-read-config.sh
+
+# Number of days until a new full backup us created
+BACKUP_PERIOD=7
+
+now=$(date +'%s')
+REFERENCE=""
+
+for (( i=1; i<BACKUP_PERIOD; i++ )); do
+	past_timestamp=$(( now - i * 24 * 60 * 60 ))
+	past_year=$(date --date="@$past_timestamp" +'%Y')
+	past_month=$(date --date="@$past_timestamp" +'%m')
+	past_day=$(date --date="@$past_timestamp" +'%d')
+	past_dir=$(YEAR="$past_year" MONTH="$past_month" DAY="$past_day" backup-get-config-var STATUS_DIR)
+	
+	# If a backup is missing, something went wrong, create a new complete backup
+	if [ ! -d "$past_dir" ] && [ ! -r "$past_dir/reference" ]; then
+		info "Found backup from ${past_year}-${past_month}-${past_day} missing, creating full backup."
+		break;
+	fi
+	
+	[ -z "$REFERENCE" ] && REFERENCE="$past_dir"
+	
+	# Found a full backup in last $BACKUP_PERIOD-1 days, so incremental backup is possible
+	if [ -r "$past_dir/complete" ] && [ ! -r "$past_dir/reference" ]; then
+		info "Found complete backup in ${past_year}-${past_month}-${past_day}, using incremental on \"$REFERENCE\"."
+		mkdir --parent "${STATUS_DIR}"
+		ln -s "$REFERENCE" "${STATUS_DIR}/reference"
+		break;
+	fi
+done
+
+# FIXME: check if enought space is available
+
+if ! "$BINDIR"/backup-files $HOST; then
+	error "File backup failed!"
+	exit 1
+fi
+
+if ! "$BINDIR"/backup-mysql $HOST; then
+	error "MySQL backup failed!"
+	exit 2
+fi
+
+touch "$STATUS_DIR/complete"

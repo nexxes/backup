@@ -5,6 +5,7 @@ export LC_ALL=C
 # Disallow unset variables
 set -o nounset
 
+# Redirect info messages/warnings to STDERR by default
 if [ ! -w /dev/fd/3 ]; then
 	exec 3>&2
 fi
@@ -14,6 +15,10 @@ if [ -t 2 ]; then
 	ERROR_COLOR="\033[0;31m"
 	ERROR_RESET="\033[0m"
 	ERROR_WHITE="\033[1;30m"
+else
+	ERROR_COLOR=""
+	ERROR_RESET=""
+	ERROR_WHITE=""
 fi
 
 # Colorize warn and info messages
@@ -25,8 +30,21 @@ if [ -t 3 ]; then
 	INFO_COLOR="\033[1;37m"
 	INFO_RESET="\033[0m"
 	INFO_WHITE="\033[1;30m"
+else
+	WARN_COLOR=""
+	WARN_RESET=""
+	WARN_WHITE=""
+	
+	INFO_COLOR=""
+	INFO_RESET=""
+	INFO_WHITE=""
 fi
 
+function ssh() {
+	info "SSH: $@"
+	$(which ssh) -F ~/.ssh/config-backup "$@"
+	return $?
+}
 
 function info() {
 	local args=""
@@ -69,6 +87,10 @@ elif [ -n "$1" ]; then
 	shift
 fi
 export CALLER
+
+# Binary base dir
+BINDIR="$(dirname "$(readlink --canonicalize "$0")")"
+export BINDIR
 
 # Host is the first parameter if not supplied as env variable
 if [ -z "${HOST:-""}" ]; then
@@ -179,8 +201,8 @@ function backup-create-folders() {
 		exit $ERR_STORAGE
 	fi
 	
-	if ! err=$(mkdir --parent "$LOG_DIR" 2>&1); then
-		error "failed to create logdir \"$LOG_DIR\": error \"$err\"!"
+	if ! err=$(mkdir --parent "$STATUS_DIR" 2>&1); then
+		error "failed to create logdir \"$STATUS_DIR\": error \"$err\"!"
 		exit $ERR_STORAGE
 	fi
 	
@@ -190,16 +212,16 @@ function backup-create-folders() {
 	fi
 	
 	if ! err=$(mkdir --parent "$MYSQL_DIR" 2>&1); then
-		error "failed to create mysql data dirr \"$MYSQL_DIR\": error \"$err\"!"
+		error "failed to create mysql data dir \"$MYSQL_DIR\": error \"$err\"!"
 		exit $ERR_STORAGE
 	fi
 	 
 	# A lot of symlinks to make navigation more comfortable
-	[ ! -L "${LOG_DIR}/data" ] && ln -s "${BACKUP_DIR}" "${LOG_DIR}/data"
-	[ ! -L "${LOG_DIR}/mirror" ] && ln -s "${MIRROR_DIR}" "${LOG_DIR}/mirror"
-	[ ! -L "${LOG_DIR}/mysql" ] && ln -s "${MYSQL_DIR}" "${LOG_DIR}/mysql"
+	[ ! -L "${STATUS_DIR}/data" ] && ln -s "${BACKUP_DIR}" "${STATUS_DIR}/data"
+	[ ! -L "${STATUS_DIR}/mirror" ] && ln -s "${MIRROR_DIR}" "${STATUS_DIR}/mirror"
+	[ ! -L "${STATUS_DIR}/mysql" ] && ln -s "${MYSQL_DIR}" "${STATUS_DIR}/mysql"
 	
-	[ ! -L "${BACKUP_DIR}/logs" ] && ln -s "${LOG_DIR}" "${BACKUP_DIR}/logs"
+	[ ! -L "${BACKUP_DIR}/status" ] && ln -s "${STATUS_DIR}" "${BACKUP_DIR}/status"
 }
 
 
@@ -303,3 +325,36 @@ function backup-verify() {
 	return 0
 }
 
+
+################################################################################
+#
+# Other helper
+#
+################################################################################
+
+
+#
+# Get a configuration variable (for different settings as currently are used)
+# e.g.
+# > DAY=1 backup-get-config-var BACKUP_DIR
+# will return the value that BACKUP_DIR would have if current day where 1
+#
+# WARNING: Only the requested variable is unset before reading the config.
+#          If you request a variable A="B/foobar" and B="/$MONTH/$DAY"
+#          than A will not change if you supply DAY because B is already fixed
+#          You than must call it with
+#          > DAY=1 B= backup-get-config-var A
+#          so B is also recalculated
+#
+# @param PRINT_VARIABLE_NAME String: name of variable to get
+#
+function backup-get-config-var() {
+	local PRINT_VARIABLE_NAME="$1"
+	shift
+	
+	(
+		unset $PRINT_VARIABLE_NAME
+		. "$BINDIR"/backup-read-config.sh $PRINT_VARIABLE_NAME
+		echo "${!PRINT_VARIABLE_NAME}"
+	) 3>/dev/null
+}
