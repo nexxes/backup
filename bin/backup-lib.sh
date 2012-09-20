@@ -40,14 +40,16 @@ else
 	INFO_WHITE=""
 fi
 
-function ssh() {
-	info "SSH: $@"
-	$(which ssh) -F ~/.ssh/config-backup "$@"
-	return $?
-}
+#function ssh() {
+#	info "SSH: $@"
+#	$(which ssh) -F ~/.ssh/config-backup "$@"
+#	return $?
+#}
 
 function info() {
 	local args=""
+	local CALLER="${FUNCNAME[1]} (${BASH_SOURCE[1]}:${BASH_LINENO[0]})"
+	[ "${FUNCNAME[1]}" == "main" ] && CALLER="$(readlink --canonicalize "$0"):${BASH_LINENO[0]}"
 	
 	[ "$1" == "-e" ] && args+=" -e" && shift
 	
@@ -59,6 +61,8 @@ function info() {
 
 function warn() {
 	local args=""
+	local CALLER="${FUNCNAME[1]} (${BASH_SOURCE[1]}:${BASH_LINENO[0]})"
+	[ "${FUNCNAME[1]}" == "main" ] && CALLER="$(readlink --canonicalize "$0"):${BASH_LINENO[0]}"
 	
 	[ "$1" == "-e" ] && args+=" -e" && shift
 	
@@ -70,6 +74,8 @@ function warn() {
 
 function error() {
 	local args=""
+	local CALLER="${FUNCNAME[1]} (${BASH_SOURCE[1]}:${BASH_LINENO[0]})"
+	[ "${FUNCNAME[1]}" == "main" ] && CALLER="$(readlink --canonicalize "$0"):${BASH_LINENO[0]}"
 	
 	[ "$1" == "-e" ] && args+=" -e" && shift
 	
@@ -79,74 +85,103 @@ function error() {
 	echo $args "$@"
 } >&2
 
-# Check if script is sourced in another bash script
-if [ "$0" != "$BASH_SOURCE" ]; then
-	CALLER=$(basename "$(basename "${BASH_SOURCE[$(( ${#BASH_SOURCE[*]} - 1 ))]}" .sh)" .pl)
-elif [ -n "$1" ]; then
-	CALLER=$(basename "$(basename "$1" .sh)" .pl)
-	shift
-fi
-export CALLER
 
-# Binary base dir
-BINDIR="$(dirname "$(readlink --canonicalize "$0")")"
-export BINDIR
+################################################################################
+#
+# Handle configuration
+#
+################################################################################
 
-# Host is the first parameter if not supplied as env variable
-if [ -z "${HOST:-""}" ]; then
-	HOST="$1"
-	shift
-fi
+#
+# Load the configuration
+#
+function backup-load-conf() {
+	# Check if script is sourced in another bash script
+	if [ "$0" != "$BASH_SOURCE" ]; then
+		CALLER=$(basename "$(basename "${BASH_SOURCE[$(( ${#BASH_SOURCE[*]} - 1 ))]}" .sh)" .pl)
+	elif [ -n "$1" ]; then
+		CALLER=$(basename "$(basename "$1" .sh)" .pl)
+		shift
+	fi
+	export CALLER
 
-# make variables available to config file
-YEAR="${YEAR:-"$(date +'%Y')"}"
-MONTH="${MONTH:-"$(date +'%m')"}"
-DAY="${DAY:-"$(date +'%d')"}"
-export YEAR MONTH DAY
+	# Binary base dir
+	BINDIR="$(dirname "$(readlink --canonicalize "$0")")"
+	export BINDIR
+	
+	# make variables available to config file
+	export YEAR="${YEAR:-"$(date +'%Y')"}"
+	export MONTH="${MONTH:-"$(date +'%m')"}"
+	export DAY="${DAY:-"$(date +'%d')"}"
+	export BACKUP_CONFDIR=${BACKUP_CONFDIR:-"$HOME/.backup"}
+	
+	# Load base config
+	[ -r "$BACKUP_CONFDIR"/backup.conf ] &&
+		. "$BACKUP_CONFDIR"/backup.conf &&
+		info "loaded config file \"$BACKUP_CONFDIR/backup.conf\""
+	
+	# Load CALLER specific config
+	[ -n "${CALLER:-""}" ] &&
+		[ -r "$BACKUP_CONFDIR"/"${CALLER}.conf" ] &&
+		. "$BACKUP_CONFDIR"/"${CALLER}.conf" &&
+		info "loaded config file \"$BACKUP_CONFDIR/${CALLER}.conf\""
 
-CONFDIR=${CONFDIR:-"$HOME/.backup"}
+	# Load host specific base config
+	[ -n  "${HOST:-""}" ] &&
+		[ -r "$BACKUP_CONFDIR"/"$HOST"/backup.conf ] &&
+		. "$BACKUP_CONFDIR"/"$HOST"/backup.conf &&
+		info "loaded config file \"$BACKUP_CONFDIR/$HOST/default.conf\""
+	
+	# Load host and CALLER specific config
+	[ -n  "${HOST:-""}" ] &&
+		[ -n "${CALLER:-""}" ] &&
+		[ -r "$BACKUP_CONFDIR"/"$HOST"/"${CALLER}.conf" ] &&
+		. "$BACKUP_CONFDIR"/"$HOST"/"${CALLER}.conf" &&
+		info "loaded config file \"$BACKUP_CONFDIR/$HOST/${CALLER}.conf\""
+	
+	# Load default config
+	[ -r "$BACKUP_CONFDIR"/default.conf ] &&
+		. "$BACKUP_CONFDIR"/default.conf &&
+		info "loaded config file \"$BACKUP_CONFDIR/default.conf\""
+	
+	# Load error config
+	[ -r "$BACKUP_CONFDIR"/errors.conf ] &&
+		. "$BACKUP_CONFDIR"/errors.conf &&
+		info "loaded config file \"$BACKUP_CONFDIR/errors.conf\""
+}
 
-# Load base config
-[ -r "$CONFDIR"/backup.conf ] &&
-	. "$CONFDIR"/backup.conf &&
-	info "loaded config file \"$CONFDIR/backup.conf\""
 
-# Load CALLER specific config
-[ -n "$CALLER" ] &&
-	[ -r "$CONFDIR"/"${CALLER}.conf" ] &&
-	. "$CONFDIR"/"${CALLER}.conf" &&
-	info "loaded config file \"$CONFDIR/${CALLER}.conf\""
-
-# Load host specific base config
-[ -r "$CONFDIR"/"$HOST"/backup.conf ] &&
-	. "$CONFDIR"/"$HOST"/backup.conf &&
-	info "loaded config file \"$CONFDIR/$HOST/default.conf\""
-
-# Load host and CALLER specific config
-[ -n "$CALLER" ] &&
-	[ -r "$CONFDIR"/"$HOST"/"${CALLER}.conf" ] &&
-	. "$CONFDIR"/"$HOST"/"${CALLER}.conf" &&
-	info "loaded config file \"$CONFDIR/$HOST/${CALLER}.conf\""
-
-# Load default config
-[ -r "$CONFDIR"/default.conf ] &&
-	. "$CONFDIR"/default.conf &&
-	info "loaded config file \"$CONFDIR/default.conf\""
-
-# Load default config
-[ -r "$CONFDIR"/errors.conf ] &&
-	. "$CONFDIR"/errors.conf &&
-	info "loaded config file \"$CONFDIR/errors.conf\""
-
-# Verify hostname is set
-if [ -z "$HOST" ]; then
-	error "no hostname set to backup"
-	exit $ERR_HOST
-fi
-
-for var in HOST CONFDIR BACKENDS; do
-	export "$var"
-done
+#
+# Get a configuration variable, replace %VAR placeholder and print the variable
+#
+# @param varname String: Name of the config variable (without BACKUP_ prefix)
+#
+function backup-conf() {
+	local varname="BACKUP_$1"
+	
+	if [ "${!varname:-""}" == "" ]; then
+		error "Configuration variable '$varname' not set!"
+		return 1
+	fi
+	
+	local data=${!varname}
+	local replace=""
+	
+	for replace in YEAR MONTH DAY HOST; do
+		# Nothing to replace for variable
+		[ "$data" == "${data/\%${replace}/""}" ] && continue
+		
+		# Requested replacement not set
+		if [ "${!replace:-""}" == "" ]; then
+			error "Try to access config variable '$varname' but could not replace %${replace}, required variable \$${replace} not set!"
+			return 1
+		fi
+		
+		data="${data//\%${replace}/${!replace}}"
+	done
+	
+	echo "$data"
+}
 
 
 ################################################################################
@@ -156,10 +191,11 @@ done
 ################################################################################
 
 function backup-find-backend() {
-	local server error errno backend
+	local HOST="$1"
+	local BACKENDS="$(backup-conf BACKENDS)"
+	local REMOTE_DIR="$(backup-conf REMOTE_DIR)"
 	
-	# If we found a backend already we do not need to search for it again
-	[ -n "${BACKEND:-""}" ] && return
+	local server error errno backend
 	
 	# Verify backends are set for host
 	if [ -z "${BACKENDS:-""}" ]; then
@@ -181,11 +217,12 @@ function backup-find-backend() {
 	
 	if [ -z "$backend" ]; then
 		error "could not find a storage backend that hosts \"$HOST\"!"
-		exit $ERR_BACKENDS
-	else
-		info "found storage server \"$backend\""
-		export BACKEND="$backend"
+		return $ERR_BACKENDS
 	fi
+	
+	info "found storage server \"$backend\""
+	echo "$backend"
+	return 0
 }
 
 
@@ -196,18 +233,26 @@ function backup-find-backend() {
 ################################################################################
 
 function backup-create-folders() {
+	local HOST="$1"
+	local MIRROR_DIR="$(backup-conf MIRROR_DIR)"
+	local STATUS_DIR="$(backup-conf STATUS_DIR)"
+	local DATA_DIR="$(backup-conf DATA_DIR)"
+	local MYSQL_DIR="$(backup-conf MYSQL_DIR)"
+	
+	
+	
 	if ! err=$(mkdir --parent "$MIRROR_DIR" 2>&1); then
 		error "failed to create mirror dir \"$MIRROR_DIR\": error \"$err\"!"
 		exit $ERR_STORAGE
 	fi
 	
 	if ! err=$(mkdir --parent "$STATUS_DIR" 2>&1); then
-		error "failed to create logdir \"$STATUS_DIR\": error \"$err\"!"
+		error "failed to create status dir \"$STATUS_DIR\": error \"$err\"!"
 		exit $ERR_STORAGE
 	fi
 	
-	if ! err=$(mkdir --parent "$BACKUP_DIR" 2>&1); then
-		error "failed to create backupdir \"$BACKUP_DIR\": error \"$err\"!"
+	if ! err=$(mkdir --parent "$DATA_DIR" 2>&1); then
+		error "failed to create data dir \"$DATA_DIR\": error \"$err\"!"
 		exit $ERR_STORAGE
 	fi
 	
@@ -217,11 +262,13 @@ function backup-create-folders() {
 	fi
 	 
 	# A lot of symlinks to make navigation more comfortable
-	[ ! -L "${STATUS_DIR}/data" ] && ln -s "${BACKUP_DIR}" "${STATUS_DIR}/data"
+	[ ! -L "${STATUS_DIR}/data" ] && ln -s "${DATA_DIR}" "${STATUS_DIR}/data"
 	[ ! -L "${STATUS_DIR}/mirror" ] && ln -s "${MIRROR_DIR}" "${STATUS_DIR}/mirror"
 	[ ! -L "${STATUS_DIR}/mysql" ] && ln -s "${MYSQL_DIR}" "${STATUS_DIR}/mysql"
 	
-	[ ! -L "${BACKUP_DIR}/status" ] && ln -s "${STATUS_DIR}" "${BACKUP_DIR}/status"
+	[ ! -L "${DATA_DIR}/status" ] && ln -s "${STATUS_DIR}" "${DATA_DIR}/status"
+	
+	return 0
 }
 
 
@@ -297,7 +344,7 @@ function backup-verify() {
 	local ref_size="$2"
 	local ref_md5="$3"
 	
-	info "Verifying file \"$file\""
+	info "Verifying file \"$file\" (ref: $ref_size/$ref_md5)"
 	
 	# Check size
 	[ -r "$ref_size" ] && ref_size=$(< "$ref_size")
@@ -318,7 +365,7 @@ function backup-verify() {
 	if [ "${ref_md5:0:32}" == "${is_md5:0:32}" ]; then
 		info "  md5sum OK"
 	else
-		error "  md5sum mismatch, file seems to be corrupt"
+		error "  md5sum mismatch, file seems to be corrupt (is: ${is_md5:0:32}, should be: ${ref_md5:0:32})"
 		return 2
 	fi
 	
@@ -358,3 +405,12 @@ function backup-get-config-var() {
 		echo "${!PRINT_VARIABLE_NAME}"
 	) 3>/dev/null
 }
+
+
+################################################################################
+#
+# Initialize
+#
+################################################################################
+
+backup-load-conf

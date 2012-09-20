@@ -1,0 +1,92 @@
+#!/bin/bash
+
+. "$(dirname "$(readlink --canonicalize "$0")")"/backup-lib.sh
+. $BINDIR/backup-mysql.sh
+. $BINDIR/backup-rsync.sh
+. $BINDIR/backup-tar.sh
+
+# Number of days until a new full backup us created
+BACKUP_PERIOD=7
+
+#
+# Try to find a reference for an incremental backup
+# Incremental only possible if a full backup is not older than BACKUP_PERIOD days
+#  and a successful incremental backup exists for each day after
+#
+function backup-incremental() {
+	local HOST="$1"
+	local now=$(date --date="${YEAR}-${MONTH}-${DAY} 03:00:00" +'%s')
+	local ref=""
+	local STATUS_DIR=$(backup-conf STATUS_DIR)
+
+	# Try to find a valid reference
+	for (( i=1; i<BACKUP_PERIOD; i++ )); do
+		local past_timestamp=$(( now - i * 24 * 60 * 60 ))
+		local YEAR=$(date --date="@$past_timestamp" +'%Y')
+		local MONTH=$(date --date="@$past_timestamp" +'%m')
+		local DAY=$(date --date="@$past_timestamp" +'%d')
+		local OLD_STATUS_DIR=$(backup-conf STATUS_DIR)
+		
+		# If a backup is missing, something went wrong, create a new complete backup
+		if [ ! -d "$OLD_STATUS_DIR" ] || [ ! -r "$OLD_STATUS_DIR/complete" ]; then
+			info "Backup from ${YEAR}-${MONTH}-${DAY} is missing, creating full backup."
+			break;
+		fi
+		
+		[ -z "$ref" ] && ref="$OLD_STATUS_DIR"
+		
+		# Found a full backup in last $BACKUP_PERIOD-1 days, so incremental backup is possible
+		if [ -r "$OLD_STATUS_DIR/complete" ] && [ ! -r "$OLD_STATUS_DIR/reference" ]; then
+			info "Found complete backup in $YEAR-$MONTH-$DAY, using incremental on \"$ref\"."
+			ln -s "$ref" "$STATUS_DIR/reference"
+			break;
+		fi
+	done
+	
+	return 0
+}
+
+#
+# Do everything that involves remote-access: rsync-mirroring, mysql-backup
+#
+function backup-remote() {
+	local HOST="$1"
+	local BACKEND=$(backup-find-backend "$HOST")
+	
+	if ! backup-create-folders "$HOST"; then
+		error "Failed to create backup folders for '$HOST'!"
+		return 1
+	fi
+	
+	# Try to find a reference for incremental backup
+	backup-incremental "$HOST"
+	
+	if ! backup-rsync "$HOST" "$BACKEND"; then
+		error "Failed to rsync '$HOST'!"
+		return 2
+	fi
+	
+	if ! backup-mysql "$HOST" "$BACKEND"; then
+		error "MySQL backup failed for '$HOST'!"
+		return 3
+	fi
+	
+	return 0
+} 2>&1
+
+# FIXME: check if enought space is available
+
+HOSTS=$(backup-conf HOSTS)
+TAR_HOSTS=""
+
+for HOST in $HOSTS; do
+	backup-remote "$HOST" &&
+	TAR_HOSTS+=" $HOST"
+done
+
+for HOST in $TAR_HOSTS; do
+	STATUS_DIR=$(backup-conf STATUS_DIR)
+	
+	backup-tar $HOST &&
+	touch "$STATUS_DIR"/complete
+done
