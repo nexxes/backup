@@ -11,7 +11,7 @@ if [ ! -w /dev/fd/3 ]; then
 fi
 
 # Colorize error messages
-if [ -t 2 ]; then
+if [ -t 2 ] || [ "${COLORS:-""}" == "yes" ]; then
 	ERROR_COLOR="\033[0;31m"
 	ERROR_RESET="\033[0m"
 	ERROR_WHITE="\033[1;30m"
@@ -22,7 +22,7 @@ else
 fi
 
 # Colorize warn and info messages
-if [ -t 3 ]; then
+if [ -t 3 ] || [ "${COLORS:-""}" == "yes" ]; then
 	WARN_COLOR="\033[1;33m"
 	WARN_RESET="\033[0m"
 	WARN_WHITE="\033[1;30m"
@@ -40,11 +40,11 @@ else
 	INFO_WHITE=""
 fi
 
-#function ssh() {
+function ssh() {
 #	info "SSH: $@"
-#	$(which ssh) -F ~/.ssh/config-backup "$@"
-#	return $?
-#}
+	$(which ssh) -F ~/.ssh/config-backup "$@"
+	return $?
+}
 
 function info() {
 	local args=""

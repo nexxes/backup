@@ -137,6 +137,10 @@ function backup-mysql() {
 	local STATUS_DIR=$(backup-conf STATUS_DIR)
 	local INNODB_FILE=$(backup-conf INNODB_FILE)
 	local MYSQL_STATIC_DIR=$(backup-conf MYSQL_STATIC_DIR)
+	local COMPRESS_BIN=$(backup-conf COMPRESS_BIN)
+	local COMPRESS_PARAMS=$(backup-conf COMPRESS_PARAMS)
+	local COMPRESS_EXT=$(backup-conf COMPRESS_EXT)
+	
 	
 	# Local name of mysql config
 	local mysql_cnf="${DATA_DIR}/my.cnf"
@@ -166,25 +170,26 @@ function backup-mysql() {
 	tables_list="$(mktemp --tmpdir table-XXXXXXXX.lst)"
 	
 	function backup-mysql-cleanup() {
+		trap - INT TERM EXIT
+		
 		local HOST="$1"
 		local BACKEND="$2"
 		
 		info "cleaning up"
 		
+		ssh $BACKEND "rm -Rfv \"$remote_mysql_cnf\" \"$remote_backup_dir\" \"$remote_innodb_error_file\""
+		rm -Rfv "$fifo_dir" "$tables_list"
+		
+		ssh $BACKEND -O exit
+		
 		eval "exec $file_reader<&-"
 		eval "exec $mysql_control>&-"
 		eval "exec $mysql_result>&-"
 		
-		ssh $BACKEND "rm -Rf \"$remote_mysql_cnf\" \"$remote_backup_dir\" \"$remote_innodb_error_file\""
-		rm -Rf "$fifo_dir" "$tables_list"
-		
-		ssh $BACKEND -O exit >/dev/null 2>&1
-		
-		trap - INT TERM EXIT
-		return 0
+		info "finishied cleaning up"
 	}
 	
-	trap "backup-mysql-cleanup $HOST $BACKEND" INT TERM EXIT
+	trap "{ backup-mysql-cleanup $HOST $BACKEND; exit 0; }" INT TERM EXIT
 
 	################################################################################
 	#
@@ -233,10 +238,6 @@ function backup-mysql() {
 	fi
 
 	info "Starting InnoDB backup"
-	local COMPRESS_BIN=$(backup-conf COMPRESS_BIN)
-	local COMPRESS_PARAMS=$(backup-conf COMPRESS_PARAMS)
-	local COMPRESS_EXT=$(backup-conf COMPRESS_EXT)
-	
 	$ssh "( $xtrabackup_bin --defaults-file=\"$remote_mysql_cnf\" \"$remote_backup_dir\" || echo \"\$?\" > \"$remote_innodb_error_file\") | $COMPRESS_BIN $COMPRESS_PARAMS" 2>"${STATUS_DIR}/xtrabackup.log" |
 	tee >(md5sum >"$innodb_md5sum_file" 2>/dev/null) >(wc --bytes > "$innodb_size_file") > "$INNODB_FILE"
 	
@@ -247,8 +248,8 @@ function backup-mysql() {
 	backup-verify "$INNODB_FILE" "$innodb_size_file" "$innodb_md5sum_file" || return $ERR_INNOBACKUP
 	
 	$ssh "cat \"${remote_backup_dir}\"/xtrabackup_checkpoints" > "${MYSQL_DIR}/xtrabackup_checkpoints"
-
-
+	
+	
 	################################################################################
 	#
 	# All table definitions and data except InnoDB data
@@ -355,6 +356,8 @@ function backup-mysql() {
 		! unlock_msg=$(backup-mysql-query "UNLOCK TABLES;" $mysql_control $mysql_result) &&
 		error "failed to unlock table \"$database.$table\" ($unlock_msg)" && return $ERR_MYSQL
 	done
+	
+	backup-mysql-cleanup $HOST $BACKEND
 	
 	return 0
 }
