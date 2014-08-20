@@ -1,6 +1,8 @@
 function backup-tar() {
 	local fakeroot_cmd=( "env" )
 	
+	local FAKEROOT=$(backup-conf FAKEROOT)
+	
 	# Check fakeroot
 	if [ "${FAKEROOT,,*}" == "yes" ]; then
 		info "Enabling fakeroot"
