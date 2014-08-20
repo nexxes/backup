@@ -300,7 +300,7 @@ function backup-mysql() {
 		
 		# Try table lock
 		if [ -z "${global_lock:-""}" ]; then
-			if ! lock_msg=$(backup-mysql-query "LOCK TABLE \`$database\`.\`$table\` READ;" $mysql_control $mysql_result); then
+			if ! lock_msg=$(backup-mysql-query "LOCK TABLE \`$database\`.\`$table\` WRITE;" $mysql_control $mysql_result); then
 				# Fallback
 				warn "failed to lock table \"$database.$table\", using global lock ($lock_msg)"
 				global_lock="yes"
