@@ -1,0 +1,3 @@
+image/var/lib/mysql/*
+image/tmp/*
+image/home/*-p0g-*/tmp/*
