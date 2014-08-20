@@ -232,13 +232,13 @@ function backup-mysql() {
 	
 	# FIXME: try to find matching xtrabackup binary
 	local xtrabackup_bin
-	if ! xtrabackup_bin="$($ssh 'which xtrabackup_51')" || ! $ssh "test -x '$xtrabackup_bin'"; then
+	if ! xtrabackup_bin="$($ssh 'which xtrabackup')" || ! $ssh "test -x '$xtrabackup_bin'"; then
 		error "could not find xtrabackup binary or file not executable: (tried \"$xtrabackup_bin\")"
 		return $ERR_INNOBACKUP
 	fi
 
 	info "Starting InnoDB backup"
-	$ssh "( $xtrabackup_bin --defaults-file=\"$remote_mysql_cnf\" \"$remote_backup_dir\" || echo \"\$?\" > \"$remote_innodb_error_file\") | $COMPRESS_BIN $COMPRESS_PARAMS" 2>"${STATUS_DIR}/xtrabackup.log" |
+	$ssh "( ulimit -n 1048576; $xtrabackup_bin --defaults-file=\"$remote_mysql_cnf\" \"$remote_backup_dir\" || echo \"\$?\" > \"$remote_innodb_error_file\") | $COMPRESS_BIN $COMPRESS_PARAMS" 2>"${STATUS_DIR}/xtrabackup.log" |
 	tee >(md5sum >"$innodb_md5sum_file" 2>/dev/null) >(wc --bytes > "$innodb_size_file") > "$INNODB_FILE"
 	
 	$ssh "test -s \"$remote_innodb_error_file\"" &&
