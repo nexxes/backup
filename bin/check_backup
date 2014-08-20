@@ -1,0 +1,36 @@
+#!/bin/bash
+
+exec 3>/dev/null
+
+. "$(dirname "$(readlink --canonicalize "$0")")"/backup-lib.sh
+
+function check_backup_help() {
+	echo "Usage: $(basename "$0") HOST [YEAR-MONTH-DAY]"
+	exit 3
+}
+
+if [ "${1:-""}" == "" ] || [ "$1" == "-h" ]; then
+	check_backup_help
+fi
+
+HOST="$1"
+
+if [ "${2:-""}" != "" ]; then
+	YEAR="${2:0:4}"
+	MONTH="${2:5:2}"
+	DAY="${2:8:2}"
+fi
+
+STATUS_DIR=$(backup-conf STATUS_DIR)
+
+if [ ! -d "$STATUS_DIR" ]; then
+	echo "CRITICAL: no backup for '$HOST' found on $YEAR-$MONTH-$DAY"
+	exit 2
+fi
+
+if [ ! -r "$STATUS_DIR/complete" ]; then
+	echo "WARNING: backup for '$HOST' not complete on $YEAR-$MONTH-$DAY"
+	exit 1
+fi
+
+echo "OK: found $( ( [ -r "$STATUS_DIR/reference" ] && echo "incremental" ) || echo "full" ) backup for '$HOST' from $YEAR-$MONTH-$DAY"
