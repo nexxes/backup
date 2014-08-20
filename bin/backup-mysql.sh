@@ -236,7 +236,7 @@ function backup-mysql() {
 		error "could not find xtrabackup binary or file not executable: (tried \"$xtrabackup_bin\")"
 		return $ERR_INNOBACKUP
 	fi
-
+	
 	info "Starting InnoDB backup"
 	$ssh "( ulimit -n 1048576; $xtrabackup_bin --defaults-file=\"$remote_mysql_cnf\" \"$remote_backup_dir\" || echo \"\$?\" > \"$remote_innodb_error_file\") | $COMPRESS_BIN $COMPRESS_PARAMS" 2>"${STATUS_DIR}/xtrabackup.log" |
 	tee >(md5sum >"$innodb_md5sum_file" 2>/dev/null) >(wc --bytes > "$innodb_size_file") > "$INNODB_FILE"
@@ -248,7 +248,6 @@ function backup-mysql() {
 	backup-verify "$INNODB_FILE" "$innodb_size_file" "$innodb_md5sum_file" || return $ERR_INNOBACKUP
 	
 	$ssh "cat \"${remote_backup_dir}\"/xtrabackup_checkpoints" > "${MYSQL_DIR}/xtrabackup_checkpoints"
-	
 	
 	################################################################################
 	#
@@ -288,6 +287,14 @@ function backup-mysql() {
 		local table="$(backup-mysql-fix-name "$table_file")"
 		
 		info "Working on table $counter of $tables_count: \"$database.$table\""
+		
+		# Check if table is a view
+		echo "SELECT TABLE_TYPE FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=\"$database\" AND TABLE_NAME=\"$table\";" >&$mysql_control
+		read -u $mysql_result table_type
+		if [ "$table_type" == "VIEW" ]; then
+			info "  table is a view, skipping"
+			continue
+		fi
 		
 		# Require global locking for table if table name still contains encoded special characters
 		local global_lock
