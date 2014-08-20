@@ -1,0 +1,4 @@
+ControlMaster auto
+ControlPath /tmp/ssh-%h.sock
+User root
+IdentityFile %d/.ssh/id_rsa_for_backup
