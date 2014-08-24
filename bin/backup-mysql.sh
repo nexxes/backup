@@ -274,7 +274,7 @@ function backup-mysql() {
 		error "failed to flush tables: ($flush_msg)" && return $ERR_MYSQL
 	
 	# Generate tables listing
-	$ssh "cd \"${REMOTE_DIR}/image/var/lib/mysql\" ; ls */*.frm" | sed 's/\.frm$//g' > "$tables_list"
+	$ssh "cd \"${REMOTE_DIR}/image/var/lib/mysql\" ; ls */*.frm" | grep -v '^\(information_schema\|performance_schema\|mysql\)/' | sed 's/\.frm$//g' > "$tables_list"
 	
 	# A little fix as a normal while ... done < "$myisam_tables" did break after the first iteration
 	eval "exec $file_reader<\"$tables_list\""
