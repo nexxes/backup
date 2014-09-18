@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Abort on error
+set -o errexit
+
 . "$(dirname "$(readlink --canonicalize "$0")")"/backup-lib.sh
 . $BINDIR/backup-mysql.sh
 . $BINDIR/backup-rsync.sh
@@ -80,6 +83,8 @@ HOSTS=$(backup-conf HOSTS)
 TAR_HOSTS=""
 
 for HOST in $HOSTS; do
+	$BINDIR/check_backup "$HOST" && continue
+	
 	backup-remote "$HOST" &&
 	TAR_HOSTS+=" $HOST"
 done
