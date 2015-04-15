@@ -1,0 +1,54 @@
+#!/bin/bash 
+
+exec 3>/dev/null
+
+. "$(dirname "$(readlink --canonicalize "$0")")"/backup-lib.sh
+
+HOSTS=($BACKUP_HOSTS)
+
+# Create header and spacer
+spacer="-----------"
+printf "%11s" ""
+
+for (( i=0; i<${#HOSTS[@]}; i++ )); do
+	printf "| %-20s" "${HOSTS[$i]}"
+	spacer="${spacer}+---------------------"
+done
+
+echo
+echo "$spacer"
+
+for (( i=0; i<=31; i++ )); do
+	YEAR=$(date --date="-$i days" +"%Y")
+	MONTH=$(date --date="-$i days" +"%m")
+	DAY=$(date --date="-$i days" +"%d")
+	
+	echo -n "$YEAR-$MONTH-$DAY "
+	
+	for (( j=0; j<${#HOSTS[@]}; j++ )); do
+		HOST="${HOSTS[$j]}"
+		STATUS_DIR=$(backup-conf STATUS_DIR)
+		
+		if [ ! -d "$STATUS_DIR" ]; then
+			echo -ne "| \e[31m"
+			printf "%-20s" "failed"
+		
+		elif [ ! -r "$STATUS_DIR/complete" ]; then
+			echo -ne "| \e[31m"
+			printf "%-20s" "incomplete"
+			
+		
+		elif [ -r "$STATUS_DIR/reference" ]; then
+			echo -ne "| \e[33m"
+			printf "%-20s" "incremental"
+		
+		else
+			echo -ne "| \e[32m"
+			printf "%-20s" "full"
+		fi
+		
+		echo -ne "\e[0m"
+	done
+	
+	echo
+done
