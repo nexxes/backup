@@ -22,15 +22,15 @@ function backup-mysql-config() {
 	local conf_files=()
 	local datadir socket
 	
-	local REMOTE_DIR=$(backup-conf REMOTE_DIR)
+	local REMOTE_DIR=$(backup-conf REMOTE_ROOT_DIR)
 	
-	if $ssh "test -r \"${REMOTE_DIR}/image/etc/mysql/server.cnf\""; then
-		conf_files[0]="${REMOTE_DIR}/image/etc/mysql/server.cnf"
+	if $ssh "test -r \"${REMOTE_DIR}/etc/mysql/server.cnf\""; then
+		conf_files[0]="${REMOTE_DIR}/etc/mysql/server.cnf"
 	else
-		conf_files[0]="${REMOTE_DIR}/image/etc/mysql/my.cnf"
+		conf_files[0]="${REMOTE_DIR}/etc/mysql/my.cnf"
 	fi
 	
-	conf_files[1]="${REMOTE_DIR}/image/root/.my.cnf"
+	conf_files[1]="${REMOTE_DIR}/root/.my.cnf"
 	local i=0
 	
 	while (( i < ${#conf_files[@]} )); do
@@ -64,8 +64,8 @@ function backup-mysql-config() {
 			if [ "${REPLY:0:11}" == "!includedir" ]; then
 				dir="${REPLY:12}"
 				
-				for f in $($ssh "ls $REMOTE_DIR/image/$dir"); do
-					conf_files[${#conf_files[@]}]="${REMOTE_DIR}/image/$dir/$f"
+				for f in $($ssh "ls ${REMOTE_DIR}/$dir"); do
+					conf_files[${#conf_files[@]}]="${REMOTE_DIR}/$dir/$f"
 				done
 				
 				continue
@@ -73,13 +73,13 @@ function backup-mysql-config() {
 			
 			# Include single file
 			if [ "${REPLY:0:8}" == "!include" ]; then
-				conf_files[${#conf_files[@]}]="${REMOTE_DIR}/image/${REPLY:9}"
+				conf_files[${#conf_files[@]}]="${REMOTE_DIR}/${REPLY:9}"
 				continue
 			fi
 			
 			# Fix pathes
 			if [ "${REPLY##?(datadir|socket|pid-file|language|tmpdir|basedir)*([$ws])=*([$ws])/}" != "${REPLY}" ]; then
-				path="${REMOTE_DIR}/image/${REPLY##**([$ws])=*([$ws])}"
+				path="${REMOTE_DIR}/${REPLY##**([$ws])=*([$ws])}"
 				path="${path//\/\///}"
 				setting="${REPLY%%*([$ws])=*}"
 				REPLY="$setting = $path"
@@ -99,11 +99,11 @@ function backup-mysql-config() {
 	done
 	
 	if [ -z "${datadir:-""}" ]; then
-		echo "datadir = ${REMOTE_DIR}/image/var/lib/mysql" >> "${conf_dir}/mysqld.cnf"
+		echo "datadir = ${REMOTE_DIR}/var/lib/mysql" >> "${conf_dir}/mysqld.cnf"
 	fi
 	
 	if [ -z "${socket:-""}" ]; then
-		echo "socket = ${REMOTE_DIR}/image/var/run/mysqld/mysqld.sock" >> "${conf_dir}/client.cnf"
+		echo "socket = ${REMOTE_DIR}/var/run/mysqld/mysqld.sock" >> "${conf_dir}/client.cnf"
 	fi
 	
 	echo "[mysqld]"
@@ -150,7 +150,8 @@ function backup-mysql() {
 	remote_mysql_cnf="$($ssh mktemp --suffix=.cnf)"
 	
 	# Put temporary backup data here
-	remote_backup_dir="$($ssh mktemp --directory --tmpdir=\"${REMOTE_DIR}\")"
+	$ssh mkdir --parent "${REMOTE_DIR}/tmp"
+	remote_backup_dir="$($ssh mktemp --directory --tmpdir=\"${REMOTE_DIR}/tmp\")"
 	
 	# Store recorded size and md5sum of innodb backup here
 	local innodb_size_file="${STATUS_DIR}/$(basename "$INNODB_FILE").size"
@@ -274,7 +275,7 @@ function backup-mysql() {
 		error "failed to flush tables: ($flush_msg)" && return $ERR_MYSQL
 	
 	# Generate tables listing
-	$ssh "cd \"${REMOTE_DIR}/image/var/lib/mysql\" ; ls */*.frm" | grep -v '^\(information_schema\|performance_schema\|mysql\)/' | sed 's/\.frm$//g' > "$tables_list"
+	$ssh "cd \"${REMOTE_DIR}/var/lib/mysql\" ; ls */*.frm" | grep -v '^\(information_schema\|performance_schema\|mysql\)/' | sed 's/\.frm$//g' > "$tables_list"
 	
 	# A little fix as a normal while ... done < "$myisam_tables" did break after the first iteration
 	eval "exec $file_reader<\"$tables_list\""
@@ -330,7 +331,7 @@ function backup-mysql() {
 		fi
 		
 		local file
-		for file_remote in $($ssh "ls \"${REMOTE_DIR}/image/var/lib/mysql/${database_dir}/${table_file}\".*"); do
+		for file_remote in $($ssh "ls \"${REMOTE_DIR}/var/lib/mysql/${database_dir}/${table_file}\".*"); do
 			local filename="$(basename "$file_remote")"
 			local file_local="${MYSQL_DIR}/$database_dir/$filename.${COMPRESS_EXT}"
 			local file_repo="${MYSQL_STATIC_DIR}/$database_dir/$filename.${COMPRESS_EXT}"
