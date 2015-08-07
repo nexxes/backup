@@ -203,6 +203,12 @@ function backup-find-backend() {
 		exit $ERR_BACKENDS
 	fi
 	
+	if [ "${BACKENDS}" == "-" ]; then
+		info "using direct backup from server \"$HOST\""
+		echo "$HOST"
+		return 0
+	fi
+	
 	# Check on which storage backend the server is currently located
 	for server in ${BACKENDS}; do
 		if ! error=$(ssh "$server" "test -d \"${REMOTE_DIR}\"" 2>&1); then
